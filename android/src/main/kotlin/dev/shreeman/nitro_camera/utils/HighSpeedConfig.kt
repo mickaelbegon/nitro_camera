@@ -21,7 +21,11 @@ object HighSpeedConfig {
      * advertised config reaches [reqFps].
      */
     fun pick(configs: List<Config>, reqWidth: Int, reqHeight: Int, reqFps: Int): Config? {
-        val reachable = configs.filter { it.fpsMax >= reqFps && reqFps >= it.fpsMin }
+        // A constrained high-speed session runs at the selected range's upper
+        // bound. Accepting a request for 120 fps through a [30, 240] range
+        // would silently capture at 240 fps, so only an exact upper bound is
+        // an honest match for a requested physical frame rate.
+        val reachable = configs.filter { it.fpsMax == reqFps && reqFps >= it.fpsMin }
         if (reachable.isEmpty()) return null
         val exact = reachable.filter { it.width == reqWidth && it.height == reqHeight }
         val pool = exact.ifEmpty { reachable }

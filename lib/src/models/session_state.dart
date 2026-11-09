@@ -15,12 +15,58 @@ enum PixelFormat {
   /// The integer sent across the FFI bridge.
   final int nativeValue;
 
-  static PixelFormat fromNative(int value) => value == 0 ? PixelFormat.yuv420 : PixelFormat.bgra;
+  static PixelFormat fromNative(int value) =>
+      value == 0 ? PixelFormat.yuv420 : PixelFormat.bgra;
 }
 
 /// YCbCr value range of the frame stream (vision-camera's full / video range):
 /// full = 0..255, video = 16..235 luma / 16..240 chroma.
 enum ColorRange { full, video, unknown }
+
+/// High-speed metadata collected natively from Camera2 capture results.
+///
+/// The timestamps are transferred only when queried, not once per frame while
+/// a recording is active.
+class HighSpeedCaptureDiagnostics {
+  const HighSpeedCaptureDiagnostics({
+    required this.width,
+    required this.height,
+    required this.minimumFps,
+    required this.captureFps,
+    required this.requestedFps,
+    required this.playbackFps,
+    required this.isSlowMotion,
+    required this.timestampsMicroseconds,
+    required this.timestampsTruncated,
+  });
+
+  factory HighSpeedCaptureDiagnostics.fromJson(Map<String, dynamic> json) {
+    return HighSpeedCaptureDiagnostics(
+      width: (json['width'] as num).toInt(),
+      height: (json['height'] as num).toInt(),
+      minimumFps: (json['minimumFps'] as num).toInt(),
+      captureFps: (json['captureFps'] as num).toInt(),
+      requestedFps: (json['requestedFps'] as num).toInt(),
+      playbackFps: (json['playbackFps'] as num).toInt(),
+      isSlowMotion: json['slowMotion'] == true,
+      timestampsMicroseconds: (json['timestampsMicroseconds'] as List? ?? [])
+          .cast<num>()
+          .map((timestamp) => timestamp.toInt())
+          .toList(growable: false),
+      timestampsTruncated: json['timestampsTruncated'] == true,
+    );
+  }
+
+  final int width;
+  final int height;
+  final int minimumFps;
+  final int captureFps;
+  final int requestedFps;
+  final int playbackFps;
+  final bool isSlowMotion;
+  final List<int> timestampsMicroseconds;
+  final bool timestampsTruncated;
+}
 
 /// A typed snapshot of the live native camera session — the parsed form of
 /// `NitroCamera.getSessionStateJson`. Prefer this over hand-parsing JSON.
@@ -49,6 +95,10 @@ class SessionState {
   /// records video only. `null` when audio is fine or wasn't requested.
   final String? audioError;
 
+  /// Diagnostics from the current or most recently stopped high-speed
+  /// recording. `null` for regular sessions and older native implementations.
+  final HighSpeedCaptureDiagnostics? highSpeedDiagnostics;
+
   const SessionState({
     required this.running,
     required this.width,
@@ -60,6 +110,7 @@ class SessionState {
     this.colorRange = ColorRange.unknown,
     this.audio = false,
     this.audioError,
+    this.highSpeedDiagnostics,
   }) : frameWidth = frameWidth ?? width,
        frameHeight = frameHeight ?? height;
 
@@ -74,12 +125,21 @@ class SessionState {
         width: (m['width'] as num?)?.toInt() ?? 0,
         height: (m['height'] as num?)?.toInt() ?? 0,
         fps: (m['fps'] as num?)?.toInt() ?? 0,
-        pixelFormat: PixelFormat.fromNative((m['pixelFormat'] as num?)?.toInt() ?? 1),
+        pixelFormat: PixelFormat.fromNative(
+          (m['pixelFormat'] as num?)?.toInt() ?? 1,
+        ),
         frameWidth: (m['frameWidth'] as num?)?.toInt(),
         frameHeight: (m['frameHeight'] as num?)?.toInt(),
-        colorRange: ColorRange.values.asNameMap()[m['colorRange']] ?? ColorRange.unknown,
+        colorRange:
+            ColorRange.values.asNameMap()[m['colorRange']] ??
+            ColorRange.unknown,
         audio: m['audio'] == true,
         audioError: m['audioError'] as String?,
+        highSpeedDiagnostics: m['highSpeedDiagnostics'] is Map<String, dynamic>
+            ? HighSpeedCaptureDiagnostics.fromJson(
+                m['highSpeedDiagnostics'] as Map<String, dynamic>,
+              )
+            : null,
       );
     } catch (_) {
       return const SessionState(
@@ -93,5 +153,6 @@ class SessionState {
   }
 
   @override
-  String toString() => 'SessionState(running: $running, ${width}x$height@${fps}fps, ${pixelFormat.name})';
+  String toString() =>
+      'SessionState(running: $running, ${width}x$height@${fps}fps, ${pixelFormat.name})';
 }

@@ -49,6 +49,11 @@ class HighSpeedConfigTest {
         assertNull(HighSpeedConfig.pick(emptyList(), 1920, 1080, 120))
     }
 
+    @Test fun `does not silently promote 120 fps to a 240 fps session`() {
+        val only240 = listOf(Config(1920, 1080, 30, 240))
+        assertNull(HighSpeedConfig.pick(only240, 1920, 1080, 120))
+    }
+
     @Test fun `off-size request falls back to the closest area that reaches the fps`() {
         // 1600x900 (1.44M px) is closer in area to 720p (0.92M) than 1080p (2.07M).
         val c = HighSpeedConfig.pick(configs, 1600, 900, 240)!!

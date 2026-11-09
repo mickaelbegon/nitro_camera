@@ -35,6 +35,8 @@ import nitro.nitro_camera_module.*
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
 import android.hardware.camera2.CameraManager
+import org.json.JSONArray
+import org.json.JSONObject
 
 import android.hardware.camera2.CameraDevice as AndroidCameraDevice
 
@@ -226,11 +228,51 @@ class CameraSession(
     internal val hasFlashUnit: Boolean = characteristics.hasFlashUnit
 
     // --- Read-back accessors (used by configure()/getSessionStateJson) ---
-    val streamWidth: Int get() = resolvedSize.width
-    val streamHeight: Int get() = resolvedSize.height
-    val activeFps: Int get() = bestFpsRange()?.upper ?: requestedFps
+    private var activeHighSpeedConfig: HighSpeedConfig.Config? = null
+    private var activeHighSpeedRequestedFps: Int? = null
+    private var lastHighSpeedDiagnostics: HighSpeedDiagnostics? = null
+    private val highSpeedTimestampsNanos = ArrayList<Long>()
+
+    private data class HighSpeedDiagnostics(
+        val config: HighSpeedConfig.Config,
+        val requestedFps: Int,
+        val timestampsNanos: List<Long>,
+        val timestampsTruncated: Boolean,
+    )
+
+    val streamWidth: Int get() = activeHighSpeedConfig?.width ?: resolvedSize.width
+    val streamHeight: Int get() = activeHighSpeedConfig?.height ?: resolvedSize.height
+    val activeFps: Int get() = activeHighSpeedConfig?.fpsMax ?: bestFpsRange()?.upper ?: requestedFps
     val currentPixelFormat: Long get() = frameOutput.pixelFormat
     val isPreviewRunning: Boolean get() = captureSession != null
+
+    /** A compact JSON payload returned through the existing session-state API.
+     * Timestamp collection stays native during recording; it is transferred
+     * once on demand, after recording, for experimental diagnostics. */
+    fun highSpeedDiagnosticsJson(): JSONObject? {
+        val diagnostics = activeHighSpeedConfig?.let { config ->
+            HighSpeedDiagnostics(
+                config = config,
+                requestedFps = activeHighSpeedRequestedFps ?: config.fpsMax,
+                timestampsNanos = highSpeedTimestampsNanos.toList(),
+                timestampsTruncated = highSpeedTimestampsNanos.size >= MAX_HIGH_SPEED_TIMESTAMPS,
+            )
+        } ?: lastHighSpeedDiagnostics ?: return null
+        return JSONObject().apply {
+            put("width", diagnostics.config.width)
+            put("height", diagnostics.config.height)
+            put("minimumFps", diagnostics.config.fpsMin)
+            put("captureFps", diagnostics.config.fpsMax)
+            put("requestedFps", diagnostics.requestedFps)
+            put("playbackFps", HIGH_SPEED_PLAYBACK_FPS)
+            put("slowMotion", true)
+            put("timestampsTruncated", diagnostics.timestampsTruncated)
+            put(
+                "timestampsMicroseconds",
+                JSONArray(diagnostics.timestampsNanos.map { it / 1_000L }),
+            )
+        }
+    }
 
     init {
         // Configure lens undistortion (corrects the ultra-wide's barrel distortion).
@@ -1641,18 +1683,39 @@ class CameraSession(
                                 try {
                                     val hs = session as CameraConstrainedHighSpeedCaptureSession
                                     highSpeedSession = session
+                                    activeHighSpeedConfig = cfg
+                                    activeHighSpeedRequestedFps = fps
+                                    highSpeedTimestampsNanos.clear()
                                     val builder = cameraDevice.createCaptureRequest(AndroidCameraDevice.TEMPLATE_RECORD)
                                     builder.addTarget(pSurface)
                                     builder.addTarget(recSurface)
                                     builder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, range)
                                     val list = hs.createHighSpeedRequestList(builder.build())
-                                    session.setRepeatingBurst(list, null, cameraHandler)
+                                    session.setRepeatingBurst(
+                                        list,
+                                        object : CameraCaptureSession.CaptureCallback() {
+                                            override fun onCaptureCompleted(
+                                                session: CameraCaptureSession,
+                                                request: CaptureRequest,
+                                                result: TotalCaptureResult,
+                                            ) {
+                                                val timestamp = result.get(CaptureResult.SENSOR_TIMESTAMP)
+                                                    ?: return
+                                                if (highSpeedTimestampsNanos.size < MAX_HIGH_SPEED_TIMESTAMPS) {
+                                                    highSpeedTimestampsNanos.add(timestamp)
+                                                }
+                                            }
+                                        },
+                                        cameraHandler,
+                                    )
                                     videoOutput.startVideoRecorder()
                                     Log.i("NitroCamera", "High-speed recording started @${cfg.fpsMax}fps")
                                     if (cont.isActive) cont.resume(true)
                                 } catch (e: Exception) {
                                     Log.e("NitroCamera", "High-speed start failed after config: ${e.message}")
                                     highSpeedSession = null
+                                    activeHighSpeedConfig = null
+                                    activeHighSpeedRequestedFps = null
                                     try { videoOutput.stopVideoRecording() } catch (_: Exception) {}
                                     try { session.close() } catch (_: Exception) {}
                                     restoreNormalSessionAfterHighSpeed()
@@ -1681,6 +1744,16 @@ class CameraSession(
     fun stopHighSpeedRecording(): RecordingResult {
         val hs = highSpeedSession ?: return RecordingResult("", 0L, 0L, 0L, 0L, 0L, 0L, 0L)
         highSpeedSession = null
+        activeHighSpeedConfig?.let { config ->
+            lastHighSpeedDiagnostics = HighSpeedDiagnostics(
+                config = config,
+                requestedFps = activeHighSpeedRequestedFps ?: config.fpsMax,
+                timestampsNanos = highSpeedTimestampsNanos.toList(),
+                timestampsTruncated = highSpeedTimestampsNanos.size >= MAX_HIGH_SPEED_TIMESTAMPS,
+            )
+        }
+        activeHighSpeedConfig = null
+        activeHighSpeedRequestedFps = null
         runOnCameraThreadBlocking {
             try { hs.stopRepeating() } catch (_: Exception) {}
         }
@@ -1704,6 +1777,13 @@ class CameraSession(
         currentRequestBuilder = null
         persistentSurfaceInSession = false
         if (!isClosed) startPreview()
+    }
+
+    private companion object {
+        const val HIGH_SPEED_PLAYBACK_FPS = 30
+        // More than two minutes at 240 fps is unnecessary for the benchmark
+        // and makes the diagnostic payload needlessly large.
+        const val MAX_HIGH_SPEED_TIMESTAMPS = 30_000
     }
 
     /** Runs [block] on the camera thread; inline when already on it (avoids a

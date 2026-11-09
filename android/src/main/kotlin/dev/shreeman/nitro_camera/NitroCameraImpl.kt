@@ -696,6 +696,7 @@ class NitroCameraImpl(
             put("colorRange", "full")
             put("audio", s.enableAudio)
             audioErrors[textureId]?.let { put("audioError", it) }
+            s.highSpeedDiagnosticsJson()?.let { put("highSpeedDiagnostics", it) }
         }.toString()
     }
 

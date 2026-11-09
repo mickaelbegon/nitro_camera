@@ -2,9 +2,11 @@ import 'dart:convert';
 
 import 'camera_exception.dart';
 
-import '../nitro_camera.native.dart' show CameraPosition, CameraLensType, VideoStabilizationMode;
+import '../nitro_camera.native.dart'
+    show CameraPosition, CameraLensType, VideoStabilizationMode;
 
-export '../nitro_camera.native.dart' show CameraPosition, CameraLensType, VideoStabilizationMode;
+export '../nitro_camera.native.dart'
+    show CameraPosition, CameraLensType, VideoStabilizationMode;
 
 /// Camera2 `INFO_SUPPORTED_HARDWARE_LEVEL` tiers (always [full] on iOS).
 enum HardwareLevel {
@@ -16,10 +18,8 @@ enum HardwareLevel {
   final String value;
   const HardwareLevel(this.value);
 
-  static HardwareLevel fromValue(String? v) => values.firstWhere(
-    (e) => e.value == v,
-    orElse: () => HardwareLevel.full,
-  );
+  static HardwareLevel fromValue(String? v) =>
+      values.firstWhere((e) => e.value == v, orElse: () => HardwareLevel.full);
 }
 
 /// The auto-focus system of a capture format.
@@ -139,6 +139,10 @@ class CameraDeviceInfo {
   /// on list position.
   final List<CameraDeviceFormat> formats;
 
+  /// Exact size/FPS combinations advertised by Android for constrained
+  /// high-speed sessions. Empty on platforms that do not expose this concept.
+  final List<CameraHighSpeedFormat> highSpeedFormats;
+
   const CameraDeviceInfo({
     required this.id,
     required this.name,
@@ -163,22 +167,44 @@ class CameraDeviceInfo {
     this.physicalDevices = const [],
     this.extensions = const [],
     this.formats = const [],
+    this.highSpeedFormats = const [],
     this.focalLength = 3.5,
     this.aperture = 1.8,
   });
 
   // Unknown wire indices (native/plugin version skew) parse to a safe default
   // instead of a RangeError.
-  static CameraPosition _positionFrom(int i) => (i >= 0 && i < CameraPosition.values.length) ? CameraPosition.values[i] : CameraPosition.external;
+  static CameraPosition _positionFrom(int i) =>
+      (i >= 0 && i < CameraPosition.values.length)
+      ? CameraPosition.values[i]
+      : CameraPosition.external;
 
-  static CameraLensType _lensTypeFrom(int i) => (i >= 0 && i < CameraLensType.values.length) ? CameraLensType.values[i] : CameraLensType.unknown;
+  static CameraLensType _lensTypeFrom(int i) =>
+      (i >= 0 && i < CameraLensType.values.length)
+      ? CameraLensType.values[i]
+      : CameraLensType.unknown;
 
   factory CameraDeviceInfo.fromJson(Map<String, dynamic> json) {
-    final fmts = (json['formats'] as List? ?? []).cast<Map<String, dynamic>>().map(CameraDeviceFormat.fromJson).toList();
+    final fmts = (json['formats'] as List? ?? [])
+        .cast<Map<String, dynamic>>()
+        .map(CameraDeviceFormat.fromJson)
+        .toList();
+    final highSpeedFormats = (json['highSpeedFormats'] as List? ?? [])
+        .cast<Map<String, dynamic>>()
+        .map(CameraHighSpeedFormat.fromJson)
+        .toList();
     // Unknown lens/extension wire strings are skipped, not errors — a newer
     // native layer may report kinds this Dart side doesn't know yet.
-    final physical = (json['physicalDevices'] as List? ?? []).cast<String>().map(PhysicalDeviceType.tryFromValue).nonNulls.toList();
-    final extensions = (json['extensions'] as List? ?? []).cast<String>().map(CameraExtension.tryFromValue).nonNulls.toList();
+    final physical = (json['physicalDevices'] as List? ?? [])
+        .cast<String>()
+        .map(PhysicalDeviceType.tryFromValue)
+        .nonNulls
+        .toList();
+    final extensions = (json['extensions'] as List? ?? [])
+        .cast<String>()
+        .map(CameraExtension.tryFromValue)
+        .nonNulls
+        .toList();
     return CameraDeviceInfo(
       id: json['id'] as String,
       name: json['name'] as String,
@@ -203,6 +229,7 @@ class CameraDeviceInfo {
       physicalDevices: physical,
       extensions: extensions,
       formats: fmts,
+      highSpeedFormats: highSpeedFormats,
       focalLength: (json['focalLength'] as num? ?? 3.5).toDouble(),
       aperture: (json['aperture'] as num? ?? 1.8).toDouble(),
     );
@@ -216,7 +243,10 @@ class CameraDeviceInfo {
   static List<CameraDeviceInfo> listFromJson(String jsonStr) {
     try {
       final list = jsonDecode(jsonStr) as List;
-      return list.cast<Map<String, dynamic>>().map(CameraDeviceInfo.fromJson).toList();
+      return list
+          .cast<Map<String, dynamic>>()
+          .map(CameraDeviceInfo.fromJson)
+          .toList();
     } catch (e) {
       throw SessionException.malformedPayload('camera-device', e);
     }
@@ -230,6 +260,38 @@ class CameraDeviceInfo {
 
   @override
   String toString() => 'CameraDeviceInfo($id, $name)';
+}
+
+/// An exact Camera2 constrained-high-speed capability.
+///
+/// A normal preview [CameraDeviceFormat.maxFps] is not evidence that this
+/// combination can be used for high-speed recording. Use this type instead.
+class CameraHighSpeedFormat {
+  const CameraHighSpeedFormat({
+    required this.width,
+    required this.height,
+    required this.minimumFps,
+    required this.maximumFps,
+  });
+
+  factory CameraHighSpeedFormat.fromJson(Map<String, dynamic> json) {
+    return CameraHighSpeedFormat(
+      width: (json['width'] as num).toInt(),
+      height: (json['height'] as num).toInt(),
+      minimumFps: (json['minimumFps'] as num).toInt(),
+      maximumFps: (json['maximumFps'] as num).toInt(),
+    );
+  }
+
+  final int width;
+  final int height;
+  final int minimumFps;
+  final int maximumFps;
+
+  bool supportsExactFps(int fps) => maximumFps == fps && fps >= minimumFps;
+
+  @override
+  String toString() => '$width×$height @$minimumFps–$maximumFps fps';
 }
 
 /// A set of cameras that can stream SIMULTANEOUSLY (multi-cam — Android API 30+
@@ -326,7 +388,11 @@ class CameraDeviceFormat {
   };
 
   factory CameraDeviceFormat.fromJson(Map<String, dynamic> json) {
-    final modes = (json['videoStabilizationModes'] as List? ?? ['off']).cast<String>().map((s) => _stabilizationValues[s]).nonNulls.toList();
+    final modes = (json['videoStabilizationModes'] as List? ?? ['off'])
+        .cast<String>()
+        .map((s) => _stabilizationValues[s])
+        .nonNulls
+        .toList();
     return CameraDeviceFormat(
       photoWidth: (json['photoWidth'] as num).toInt(),
       photoHeight: (json['photoHeight'] as num).toInt(),
@@ -340,11 +406,16 @@ class CameraDeviceFormat {
       supportsVideoHdr: json['supportsVideoHdr'] == true,
       supportsPhotoHdr: json['supportsPhotoHdr'] == true,
       supportsDepthCapture: json['supportsDepthCapture'] == true,
-      autoFocusSystem: AutoFocusSystem.fromValue(json['autoFocusSystem'] as String?),
-      videoStabilizationModes: modes.isEmpty ? const [VideoStabilizationMode.off] : modes,
+      autoFocusSystem: AutoFocusSystem.fromValue(
+        json['autoFocusSystem'] as String?,
+      ),
+      videoStabilizationModes: modes.isEmpty
+          ? const [VideoStabilizationMode.off]
+          : modes,
     );
   }
 
   @override
-  String toString() => 'CameraDeviceFormat(${videoWidth}x$videoHeight@${maxFps}fps)';
+  String toString() =>
+      'CameraDeviceFormat(${videoWidth}x$videoHeight@${maxFps}fps)';
 }

@@ -189,6 +189,26 @@ class CameraDeviceDetails(
             formatsArr.put(fmt)
         }
 
+        // Unlike CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES, these combinations
+        // are valid for constrained high-speed sessions at this *exact* size.
+        // Keep them separate so clients never offer a 120/240 fps mode based
+        // on a generic preview FPS range.
+        val highSpeedFormats = JSONArray()
+        map?.let { configurationMap ->
+            for (size in configurationMap.highSpeedVideoSizes) {
+                for (range in configurationMap.getHighSpeedVideoFpsRangesFor(size)) {
+                    highSpeedFormats.put(
+                        JSONObject().apply {
+                            put("width", size.width)
+                            put("height", size.height)
+                            put("minimumFps", range.lower)
+                            put("maximumFps", range.upper)
+                        },
+                    )
+                }
+            }
+        }
+
         return JSONObject().apply {
             put("id",                  cameraId)
             put("name",                name)
@@ -214,6 +234,7 @@ class CameraDeviceDetails(
             put("focalLength",         focalLength.toDouble())
             put("aperture",            aperture.toDouble())
             put("formats",             formatsArr)
+            put("highSpeedFormats",    highSpeedFormats)
         }
     }
 
