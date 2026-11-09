@@ -1779,13 +1779,6 @@ class CameraSession(
         if (!isClosed) startPreview()
     }
 
-    private companion object {
-        const val HIGH_SPEED_PLAYBACK_FPS = 30
-        // More than two minutes at 240 fps is unnecessary for the benchmark
-        // and makes the diagnostic payload needlessly large.
-        const val MAX_HIGH_SPEED_TIMESTAMPS = 30_000
-    }
-
     /** Runs [block] on the camera thread; inline when already on it (avoids a
      *  deadlock when MediaRecorder callbacks — e.g. onMaxReached — fire there). */
     private fun runOnCameraThreadBlocking(block: () -> Unit) {
@@ -1823,6 +1816,11 @@ class CameraSession(
     }
 
     companion object {
+        const val HIGH_SPEED_PLAYBACK_FPS = 30
+        // More than two minutes at 240 fps is unnecessary for the benchmark
+        // and makes the diagnostic payload needlessly large.
+        const val MAX_HIGH_SPEED_TIMESTAMPS = 30_000
+
         /** Whether the 4-stream (preview + photo + frames + recorder) combo is known-good. */
         fun canPreWireRecorderSurface(characteristics: CameraCharacteristics): Boolean {
             val level = characteristics.get(CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL)
